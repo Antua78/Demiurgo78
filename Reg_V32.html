@@ -1,0 +1,1858 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>REGISTRO DE TAREAS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+            touch-action: manipulation; /* Mejora la respuesta táctil en móviles */
+        }
+        /* Estilo para el botón de tarea ACTIVA (en el timer) */
+        .btn-active {
+            outline: 4px solid rgba(239, 68, 68, 0.7); /* ring-4 ring-red-400 */
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+            transform: scale(1.02);
+            animation: pulse-red 1s infinite alternate;
+        }
+        @keyframes pulse-red {
+            from { box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+            to { box-shadow: 0 0 20px rgba(239, 68, 68, 0.8); }
+        }
+        /* Estilos específicos para el gráfico SVG */
+        .task-bar {
+            height: 25px; /* Altura de la barra de actividad */
+            cursor: pointer;
+            transition: opacity 0.3s;
+        }
+        .task-label {
+            fill: #374151; /* Color de texto gris oscuro */
+            font-size: 10px;
+            font-weight: 600;
+        }
+        #tooltip {
+            position: absolute;
+            background-color: rgba(0,0,0,0.8);
+            color: white;
+            padding: 5px;
+            border-radius: 4px;
+            pointer-events: none;
+            opacity: 0;
+            font-size: 12px;
+            z-index: 1000;
+        }
+        .grid-line-dot {
+            stroke-dasharray: 2, 4; /* Punteado */
+            stroke: #D1D5DB;
+            stroke-width: 1;
+            opacity: 0.7;
+        }
+    </style>
+    <script>
+        // --- Constantes y Variables Globales ---
+        const STORAGE_KEY = 'leanActivities';
+        const NAMES_STORAGE_KEY = 'leanNames';
+        const ROLES_STORAGE_KEY = 'leanRoles';
+        const EMAIL_STORAGE_KEY = 'studyEmail';
+        const TASKS_STORAGE_KEY = 'leanTasks';
+        
+        // Constante base para la ventana de visualización (5 minutos = 300,000 ms)
+        const FIXED_WINDOW_MS = 5 * 60 * 1000; 
+        const MINUTE_MS = 60 * 1000;
+
+        // Listas por defecto (solo se usan si localStorage está vacío)
+        const DEFAULT_NAMES = ["IZNATA", "CARLOS", "MACIAS", "JUANMA", "FABIAN", "VICTOR", "JOSE", "MIGUEL", "ANTONIO", "BESAY", "JJ", "ALFONSO", "DAVID", "JONY", "OTROS"];
+        const DEFAULT_ROLES = ["JEFE DE TURNO", "RECEPCIÓN", "AGENCIAS", "PEDIDOS", "ORDEN ALMACEN", "OTROS"];
+
+        // Lista de Tareas por defecto
+        const DEFAULT_TASKS = [
+            // CÓDIGO DE COLOR/CATEGORÍA: bg-color-number (Ej: bg-green-600)
+            // Value (Verde) - Aportan Valor Directo
+            { name: "Operación A", color: "bg-green-600 hover:bg-green-700", category: "Value" },
+            { name: "Proceso B", color: "bg-green-600 hover:bg-green-700", category: "Value" },
+            
+            // Setup (Amarillo) - Necesarias, pero no añaden valor
+            { name: "Cambio de Herramienta", color: "bg-yellow-500 hover:bg-yellow-600", category: "Setup" },
+            { name: "Ajuste de Máquina", color: "bg-yellow-500 hover:bg-yellow-600", category: "Setup" },
+            
+            // Support (Azul) - Necesarias (Soporte, Calidad, Info)
+            { name: "Inspección/Calidad", color: "bg-blue-500 hover:bg-blue-600", category: "Support" },
+            { name: "Revisión de Documentos", color: "bg-blue-500 hover:bg-blue-600", category: "Support" },
+            { name: "Reunión de Equipo", color: "bg-sky-500 hover:bg-sky-600", category: "Support" },
+            { name: "Reporte/Registro", color: "bg-sky-500 hover:bg-sky-600", category: "Support" },
+            
+            // Waste (Rojo) - Desperdicio Puro (Muda)
+            { name: "Espera de Material", color: "bg-red-500 hover:bg-red-600", category: "Waste" },
+            { name: "Búsqueda de Herramientas", color: "bg-red-500 hover:bg-red-600", category: "Waste" },
+            { name: "Desplazamiento Innecesario", color: "bg-rose-500 hover:bg-rose-600", category: "Waste" },
+            { name: "Defectos/Retrabajo", color: "bg-rose-500 hover:bg-rose-600", category: "Waste" },
+            
+            // Personal/Pausa (Gris) - Tiempo Personal
+            { name: "Pausa/Descanso", color: "bg-gray-500 hover:bg-gray-600", category: "Personal" }, 
+            { name: "Asuntos Personales", color: "bg-gray-500 hover:bg-gray-600", category: "Personal" }, 
+            
+            // Otras 2 (para llegar a 16)
+            { name: "Limpieza", color: "bg-teal-500 hover:bg-teal-600", category: "Support" }, 
+            { name: "Formación", color: "bg-indigo-500 hover:bg-indigo-600", category: "Support" },
+        ];
+        
+        // Opciones de color/categoría para el modal de añadir tarea
+        const TASK_COLOR_OPTIONS = [
+            { category: "Value", name: "Valor Añadido (Verde)", color: "bg-green-600 hover:bg-green-700" },
+            { category: "Setup", name: "Preparación (Amarillo)", color: "bg-yellow-500 hover:bg-yellow-600" },
+            { category: "Support", name: "Soporte (Azul)", color: "bg-blue-500 hover:bg-blue-600" },
+            { category: "Waste", name: "Desperdicio (Rojo)", color: "bg-red-500 hover:bg-red-600" },
+            { category: "Personal", name: "Personal (Gris)", color: "bg-gray-500 hover:bg-gray-600" },
+        ];
+
+
+        let NAMES = []; 
+        let ROLES = []; 
+        let CURRENT_TASKS = []; // La lista de tareas usada por la aplicación
+        let studyEmail = ""; 
+
+        let isStudyActive = false; // Estado Global del Estudio (INICIO/FIN)
+        let activeTask = null; // La tarea que se está midiendo en tiempo real
+        let intervalId = null;
+        let studyStartTime = null; // NUEVO: Para el gráfico
+        let studyName = "DESCONOCIDO"; // Metadato del estudio: Nombre
+        let studyRole = "SIN_PUESTO"; // Metadato del estudio: Puesto
+        let csvFileName = ""; // Almacena el nombre del último archivo CSV generado
+        
+        // Colores y Escalas para D3.js (Mapeo de colores Tailwind a valores Hex)
+        const COLOR_MAP = {
+            'bg-green-600': '#059669', // Value
+            'bg-emerald-600': '#059669', // Value
+            'bg-yellow-500': '#F59E0B', // Setup
+            'bg-amber-500': '#F59E0B', // Setup
+            'bg-blue-500': '#3B82F6', // Support
+            'bg-sky-500': '#0EA5E9', // Support
+            'bg-red-500': '#EF4444', // Waste
+            'bg-rose-500': '#F43F5E', // Waste
+            'bg-gray-500': '#6B7280', // Personal/Pausa
+            'bg-teal-500': '#14B8A6', // Support (Limpieza)
+            'bg-indigo-500': '#6366F1', // Support (Formación)
+        };
+        // Mapeo inverso de categorías para agrupar en el gráfico
+        const CATEGORY_GROUPS = {
+            'Value': 'Valor Añadido',
+            'Support': 'Valor Añadido',
+            'Setup': 'No Valor / Desperdicio',
+            'Waste': 'No Valor / Desperdicio',
+            'Personal': 'No Valor / Desperdicio',
+        };
+
+        // Variables de dimensión del gráfico para mejorar la estabilidad
+        const MARGIN = { top: 50, right: 150, bottom: 20, left: 150 }; 
+        const BAR_HEIGHT = 28; 
+        const LABEL_MARGIN = 5; 
+
+        // --- Funciones de Persistencia ---
+        
+        function loadActivities() {
+            try {
+                const data = localStorage.getItem(STORAGE_KEY);
+                return data ? JSON.parse(data) : [];
+            } catch (e) {
+                console.error("Error al cargar actividades de localStorage:", e);
+                return [];
+            }
+        }
+
+        function saveActivities(activities) {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(activities));
+            } catch (e) {
+                console.error("Error al guardar actividades en localStorage:", e);
+                showModal("Error de Almacenamiento", "No se pudo guardar la actividad en el almacenamiento local de tu navegador.");
+            }
+        }
+        
+        function loadData(key, defaultValue) {
+            try {
+                const data = localStorage.getItem(key);
+                if (!data || data === '[]') return defaultValue; 
+                return JSON.parse(data);
+            } catch (e) {
+                console.error(`Error al cargar datos para ${key}:`, e);
+                return defaultValue;
+            }
+        }
+
+        function saveData(key, data) {
+            try {
+                localStorage.setItem(key, JSON.stringify(data));
+            } catch (e) {
+                console.error(`Error al guardar datos para ${key}:`, e);
+                showModal("Error de Almacenamiento", `No se pudo guardar la lista ${key} en el almacenamiento local.`);
+            }
+        }
+
+        function loadListsAndEmail() {
+            // Cargar Nombres y Puestos (sin 'OTROS') y ordenar
+            NAMES = loadData(NAMES_STORAGE_KEY, DEFAULT_NAMES).filter(n => n !== 'OTROS');
+            ROLES = loadData(ROLES_STORAGE_KEY, DEFAULT_ROLES).filter(r => r !== 'OTROS');
+            NAMES.sort((a, b) => a.localeCompare(b));
+            ROLES.sort((a, b) => a.localeCompare(b));
+
+            if (!NAMES.includes('OTROS')) NAMES.push('OTROS');
+            if (!ROLES.includes('OTROS')) ROLES.push('OTROS');
+            
+            // Cargar Tareas
+            CURRENT_TASKS = loadData(TASKS_STORAGE_KEY, DEFAULT_TASKS);
+            CURRENT_TASKS.sort((a, b) => a.name.localeCompare(b.name));
+            
+            // Cargar Email
+            studyEmail = localStorage.getItem(EMAIL_STORAGE_KEY) || "";
+            document.getElementById('current-email-display').textContent = studyEmail || 'No configurado';
+        }
+
+        function saveLists() {
+            saveData(NAMES_STORAGE_KEY, NAMES.filter(n => n !== 'OTROS'));
+            saveData(ROLES_STORAGE_KEY, ROLES.filter(r => r !== 'OTROS'));
+            saveData(TASKS_STORAGE_KEY, CURRENT_TASKS);
+            loadListsAndEmail();
+        }
+
+        function saveEmail(email) {
+            studyEmail = email;
+            localStorage.setItem(EMAIL_STORAGE_KEY, email);
+            document.getElementById('current-email-display').textContent = studyEmail || 'No configurado';
+        }
+
+        /** Cargar el studyStartTime si el estudio está activo */
+        function checkActiveTaskOnLoad(activities) {
+            const lastActive = activities.find(a => a.status === 'Activa');
+            if (lastActive) {
+                activeTask = {
+                    name: lastActive.taskName,
+                    startTime: lastActive.startTime,
+                    color: lastActive.color 
+                };
+                isStudyActive = true;
+                // Intentar recuperar el studyStartTime de la primera actividad
+                studyStartTime = activities[0] ? activities[0].startTime : activeTask.startTime;
+                
+                updateUIForActiveTask(activeTask.name, new Date(activeTask.startTime));
+            } else {
+                isStudyActive = false;
+                studyStartTime = null;
+            }
+            updateControlButtons();
+        }
+
+        // --- Funciones de Utilidad ---
+
+        function formatDuration(ms) {
+            const totalSeconds = Math.floor(ms / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+
+            const pad = (num) => num.toString().padStart(2, '0');
+            return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+        }
+        
+        // Nueva función para formatear la duración de Tiempos Mín/Máx/Prom
+        function formatDurationWithMilliseconds(ms) {
+            if (ms === Infinity) return "---";
+            const totalSeconds = Math.floor(ms / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            const milliseconds = Math.floor(ms % 1000);
+
+            const pad = (num) => num.toString().padStart(2, '0');
+            const padMs = (num) => num.toString().padStart(3, '0');
+            
+            // Para fines de tabla, no mostraremos milisegundos a menos que sea un tiempo muy corto
+            if (ms < 1000) {
+                 return `${pad(0)}:${pad(0)}:${pad(0)}.${padMs(milliseconds)}`;
+            }
+            return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+        }
+
+        
+        function getAccumulatedData(allActivities) {
+            const activitiesToProcess = allActivities.filter(a => a.status === 'Completada');
+            const accumulated = {};
+
+            activitiesToProcess.forEach(activity => {
+                const name = activity.taskName;
+                const duration = activity.durationMs;
+                const taskInfo = CURRENT_TASKS.find(t => t.name === name);
+
+                if (!accumulated[name]) {
+                    accumulated[name] = {
+                        taskName: name,
+                        totalDurationMs: 0,
+                        count: 0,
+                        minDurationMs: Infinity,
+                        maxDurationMs: 0,
+                        durations: [], // Para calcular el promedio
+                        color: taskInfo ? taskInfo.color : 'bg-gray-500', 
+                        category: taskInfo ? taskInfo.category : 'N/A'
+                    };
+                }
+
+                accumulated[name].totalDurationMs += duration;
+                accumulated[name].count += 1;
+                accumulated[name].minDurationMs = Math.min(accumulated[name].minDurationMs, duration);
+                accumulated[name].maxDurationMs = Math.max(accumulated[name].maxDurationMs, duration);
+                accumulated[name].durations.push(duration);
+            });
+            
+            // Calcular el promedio
+            Object.values(accumulated).forEach(data => {
+                const sum = data.durations.reduce((a, b) => a + b, 0);
+                data.averageDurationMs = data.count > 0 ? (sum / data.count) : 0;
+            });
+
+
+            return Object.values(accumulated).sort((a, b) => a.taskName.localeCompare(b.taskName));
+        }
+
+
+        function stopAndSaveActiveTask(endTime, activities) {
+            if (!activeTask) return;
+
+            const durationMs = endTime.getTime() - activeTask.startTime;
+            
+            const taskIndex = activities.findIndex(a => a.status === 'Activa');
+            
+            if (taskIndex !== -1) {
+                activities[taskIndex].endTime = endTime.getTime();
+                activities[taskIndex].durationMs = durationMs;
+                activities[taskIndex].status = "Completada";
+            }
+            
+            activeTask = null;
+        }
+        
+        // --- Funciones de Gestión de Listas y Email (AJUSTES) ---
+
+        function addName() { /* ... Lógica existente ... */
+            const input = document.getElementById('settings-add-name-input');
+            const newName = input.value.trim().toUpperCase();
+            
+            const coreNames = NAMES.filter(n => n !== 'OTROS');
+
+            if (newName && newName !== 'OTROS' && !coreNames.includes(newName)) {
+                coreNames.push(newName);
+                coreNames.sort((a, b) => a.localeCompare(b));
+                NAMES = coreNames; 
+                if (!NAMES.includes('OTROS')) NAMES.push('OTROS');
+
+                saveLists();
+                input.value = '';
+                renderSettingsLists();
+                showModal('Éxito', `Nombre '${newName}' añadido correctamente.`);
+            } else if (newName === 'OTROS') {
+                showModal('Error', 'No se puede añadir "OTROS" como nombre.');
+            } else if (!newName) {
+                showModal('Error', 'Introduce un nombre válido.');
+            } else {
+                showModal('Error', `El nombre '${newName}' ya existe.`);
+            }
+        }
+
+        function removeName() { /* ... Lógica existente ... */
+            const select = document.getElementById('settings-remove-name-select');
+            const nameToRemove = select.value;
+
+            if (nameToRemove && nameToRemove !== 'OTROS') {
+                NAMES = NAMES.filter(name => name !== nameToRemove);
+                saveLists();
+                renderSettingsLists();
+                showModal('Éxito', `Nombre '${nameToRemove}' eliminado correctamente.`);
+            } else if (nameToRemove === 'OTROS') {
+                showModal('Error', 'No se puede eliminar la opción "OTROS".');
+            } else {
+                showModal('Error', 'Selecciona un nombre para eliminar.');
+            }
+        }
+
+        function addRole() { /* ... Lógica existente ... */
+            const input = document.getElementById('settings-add-role-input');
+            const newRole = input.value.trim().toUpperCase();
+            
+            const coreRoles = ROLES.filter(r => r !== 'OTROS');
+
+            if (newRole && newRole !== 'OTROS' && !coreRoles.includes(newRole)) {
+                coreRoles.push(newRole);
+                coreRoles.sort((a, b) => a.localeCompare(b));
+                ROLES = coreRoles; 
+                if (!ROLES.includes('OTROS')) ROLES.push('OTROS');
+
+                saveLists();
+                input.value = '';
+                renderSettingsLists();
+                showModal('Éxito', `Puesto '${newRole}' añadido correctamente.`);
+            } else if (newRole === 'OTROS') {
+                showModal('Error', 'No se puede añadir "OTROS" como puesto.');
+            } else if (!newRole) {
+                showModal('Error', 'Introduce un puesto válido.');
+            } else {
+                showModal('Error', `El puesto '${newRole}' ya existe.`);
+            }
+        }
+
+        function removeRole() { /* ... Lógica existente ... */
+            const select = document.getElementById('settings-remove-role-select');
+            const roleToRemove = select.value;
+
+            if (roleToRemove && roleToRemove !== 'OTROS') {
+                ROLES = ROLES.filter(role => role !== roleToRemove);
+                saveLists();
+                renderSettingsLists();
+                showModal('Éxito', `Puesto '${roleToRemove}' eliminado correctamente.`);
+            } else if (roleToRemove === 'OTROS') {
+                showModal('Error', 'No se puede eliminar la opción "OTROS".');
+            } else {
+                showModal('Error', 'Selecciona un puesto para eliminar.');
+            }
+        }
+        
+        function addTask() { /* ... Lógica existente ... */
+            const input = document.getElementById('settings-add-task-input');
+            const colorSelect = document.getElementById('settings-add-task-color');
+            const newTaskName = input.value.trim();
+            const selectedColorValue = colorSelect.value;
+            const selectedColor = TASK_COLOR_OPTIONS.find(c => c.color === selectedColorValue);
+            
+            if (!newTaskName || !selectedColor) {
+                showModal('Error', 'Debes introducir un nombre de tarea y seleccionar una categoría/color.');
+                return;
+            }
+
+            const exists = CURRENT_TASKS.some(t => t.name.toLowerCase() === newTaskName.toLowerCase());
+
+            if (!exists) {
+                const newTask = { 
+                    name: newTaskName, 
+                    color: selectedColor.color, 
+                    category: selectedColor.category 
+                };
+                CURRENT_TASKS.push(newTask);
+                saveLists();
+                input.value = '';
+                renderSettingsLists();
+                window.setupApp();
+                showModal('Éxito', `Tarea '${newTaskName}' añadida correctamente.`);
+            } else {
+                showModal('Error', `La tarea '${newTaskName}' ya existe.`);
+            }
+        }
+
+        function removeTask() { /* ... Lógica existente ... */
+            const select = document.getElementById('settings-remove-task-select');
+            const taskNameToRemove = select.value;
+
+            if (taskNameToRemove) {
+                if (CURRENT_TASKS.length <= 1) {
+                    showModal('Error', 'Debe haber al menos una tarea registrada.');
+                    return;
+                }
+
+                CURRENT_TASKS = CURRENT_TASKS.filter(task => task.name !== taskNameToRemove);
+                saveLists();
+                renderSettingsLists();
+                window.setupApp();
+                showModal('Éxito', `Tarea '${taskNameToRemove}' eliminada correctamente.`);
+            } else {
+                showModal('Error', 'Selecciona una tarea para eliminar.');
+            }
+        }
+
+        function handleEmailSave() { /* ... Lógica existente ... */
+            const input = document.getElementById('settings-email-input');
+            const email = input.value.trim();
+
+            if (!email) {
+                saveEmail("");
+                showModal('Éxito', 'Correo electrónico eliminado.');
+            } else if (/\S+@\S+\.\S+/.test(email)) {
+                saveEmail(email);
+                showModal('Éxito', `Correo electrónico guardado: ${email}`);
+            } else {
+                showModal('Error', 'Formato de correo electrónico no válido.');
+            }
+        }
+        
+        function renderSettingsLists() { /* ... Lógica existente ... */
+            loadListsAndEmail(); 
+
+            const nameRemoveSelect = document.getElementById('settings-remove-name-select');
+            const roleRemoveSelect = document.getElementById('settings-remove-role-select');
+            const emailInput = document.getElementById('settings-email-input');
+            
+            nameRemoveSelect.innerHTML = '<option value="" disabled selected>Selecciona Nombre</option>';
+            roleRemoveSelect.innerHTML = '<option value="" disabled selected>Selecciona Puesto</option>';
+
+            NAMES.filter(n => n !== 'OTROS').forEach(name => {
+                nameRemoveSelect.innerHTML += `<option value="${name}">${name}</option>`;
+            });
+            ROLES.filter(r => r !== 'OTROS').forEach(role => {
+                roleRemoveSelect.innerHTML += `<option value="${role}">${role}</option>`;
+            });
+
+            const taskRemoveSelect = document.getElementById('settings-remove-task-select');
+            const taskColorSelect = document.getElementById('settings-add-task-color');
+            const currentTasksList = document.getElementById('settings-current-tasks-list');
+
+            taskRemoveSelect.innerHTML = '<option value="" disabled selected>Selecciona Tarea</option>';
+            taskColorSelect.innerHTML = '<option value="" disabled selected>Selecciona Categoría</option>';
+            currentTasksList.innerHTML = '';
+
+            TASK_COLOR_OPTIONS.forEach(option => {
+                taskColorSelect.innerHTML += `<option value="${option.color}">${option.name}</option>`;
+            });
+
+            CURRENT_TASKS.forEach(task => {
+                taskRemoveSelect.innerHTML += `<option value="${task.name}">${task.name} (${task.category})</option>`;
+                
+                const li = document.createElement('li');
+                li.className = `p-1 px-2 rounded flex justify-between items-center text-gray-700 ${task.color.replace('bg-', 'bg-').replace('hover:bg-','') + '/20'}`;
+                li.innerHTML = `
+                    <span>${task.name}</span>
+                    <span class="font-bold text-xs px-2 py-0.5 rounded-full ${task.color.replace('hover:bg-', '')} text-white">${task.category}</span>
+                `;
+                currentTasksList.appendChild(li);
+            });
+            
+            if (CURRENT_TASKS.length === 0) {
+                currentTasksList.innerHTML = '<li class="text-center text-gray-500 py-2">No hay tareas definidas.</li>';
+            }
+
+            emailInput.value = studyEmail;
+            document.getElementById('current-email-display').textContent = studyEmail || 'No configurado';
+        }
+
+
+        // --- Lógica de Captura de Datos (Nombre/Puesto) ---
+
+        function openDataCaptureModal() { /* ... Lógica existente ... */
+            const modal = document.getElementById('data-capture-modal');
+            modal.classList.remove('hidden');
+            
+            loadListsAndEmail(); 
+
+            const nameSelect = document.getElementById('name-select');
+            const roleSelect = document.getElementById('role-select');
+            
+            nameSelect.innerHTML = '';
+            roleSelect.innerHTML = '';
+
+            nameSelect.innerHTML += '<option value="" disabled selected>Selecciona Nombre</option>';
+            roleSelect.innerHTML += '<option value="" disabled selected>Selecciona Puesto</option>';
+
+            NAMES.forEach(name => {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                nameSelect.appendChild(option);
+            });
+
+            ROLES.forEach(role => {
+                const option = document.createElement('option');
+                option.value = role;
+                option.textContent = role;
+                roleSelect.appendChild(option);
+            });
+            
+            document.getElementById('manual-name-group').classList.add('hidden');
+            document.getElementById('manual-role-group').classList.add('hidden');
+            document.getElementById('manual-name-input').value = '';
+            document.getElementById('manual-role-input').value = '';
+
+            studyName = "DESCONOCIDO";
+            studyRole = "SIN_PUESTO";
+            document.getElementById('current-study-name').textContent = studyName;
+            document.getElementById('current-study-role').textContent = studyRole;
+        }
+        
+        function handleNameSelectChange() { /* ... Lógica existente ... */
+            const select = document.getElementById('name-select');
+            const manualGroup = document.getElementById('manual-name-group');
+            if (select.value === 'OTROS') {
+                manualGroup.classList.remove('hidden');
+            } else {
+                manualGroup.classList.add('hidden');
+            }
+        }
+        
+        function handleRoleSelectChange() { /* ... Lógica existente ... */
+            const select = document.getElementById('role-select');
+            const manualGroup = document.getElementById('manual-role-group');
+            if (select.value === 'OTROS') {
+                manualGroup.classList.remove('hidden');
+            } else {
+                manualGroup.classList.add('hidden');
+            }
+        }
+
+        function handleDataCapture() { /* ... Lógica existente ... */
+            const nameSelect = document.getElementById('name-select');
+            const roleSelect = document.getElementById('role-select');
+            const manualNameInput = document.getElementById('manual-name-input');
+            const manualRoleInput = document.getElementById('manual-role-input');
+
+            let name = nameSelect.value;
+            let role = roleSelect.value;
+            
+            if (CURRENT_TASKS.length === 0) {
+                 showModal("Error Crítico", "No hay tareas definidas. Ve a Ajustes (rueda dentada) y añade al menos una tarea antes de iniciar el estudio.");
+                 return;
+            }
+
+            // 1. Determinar Nombre
+            if (!name) {
+                showModal("Error de Entrada", "Debes seleccionar un nombre.");
+                return;
+            } else if (name === 'OTROS') {
+                name = manualNameInput.value.trim();
+                if (!name) {
+                    showModal("Error de Entrada", "Debes introducir el nombre manualmente al seleccionar OTROS.");
+                    return;
+                }
+            }
+
+            // 2. Determinar Puesto
+            if (!role) {
+                showModal("Error de Entrada", "Debes seleccionar un puesto.");
+                return;
+            } else if (role === 'OTROS') {
+                role = manualRoleInput.value.trim();
+                if (!role) {
+                    showModal("Error de Entrada", "Debes introducir el puesto manualmente al seleccionar OTROS.");
+                    return;
+                }
+            }
+            
+            // Almacenar metadatos y comenzar el estudio
+            studyName = name;
+            studyRole = role;
+            
+            document.getElementById('data-capture-modal').classList.add('hidden');
+            
+            startGlobalStudy();
+        }
+
+        function startGlobalStudy() { 
+            const now = new Date();
+            // Borrar todo el historial al iniciar un nuevo estudio
+            localStorage.removeItem(STORAGE_KEY); 
+            
+            isStudyActive = true;
+            studyStartTime = now.getTime(); // Guardar el tiempo de inicio global
+            updateControlButtons();
+            renderTaskList(loadActivities());
+            renderGanttChart(loadActivities()); // Inicializar el gráfico
+            
+            // Ocultar botón de exportar gráfico al inicio
+            document.getElementById('export-graph-btn').classList.add('hidden');
+
+            document.getElementById('current-study-name').textContent = studyName;
+            document.getElementById('current-study-role').textContent = studyRole;
+
+            showModal("Estudio Iniciado", `Estudio iniciado por ${studyName} (${studyRole}). Pulsa cualquier tarea para empezar a registrar el tiempo.`);
+        }
+
+
+        // --- Lógica de Control Global (INICIO/FIN) ---
+        
+        function startStudy() {
+            if (isStudyActive) return;
+            openDataCaptureModal();
+        }
+
+        function endStudy() {
+            if (!isStudyActive) {
+                showModal("Estudio Inactivo", "El estudio ya ha finalizado.");
+                return;
+            }
+
+            const now = new Date();
+            let activities = loadActivities();
+            
+            // 1. Detener y guardar la última tarea si está corriendo
+            stopAndSaveActiveTask(now, activities);
+
+            // 2. Guardar estado y finalizar
+            saveActivities(activities);
+            isStudyActive = false;
+            
+            // 3. Actualizar interfaz
+            updateUIForStop();
+            updateControlButtons();
+            renderTaskList(activities);
+            renderGanttChart(activities); // Renderizar la versión final del gráfico
+
+            // Mostrar botón de exportar gráfico al finalizar
+            document.getElementById('export-graph-btn').classList.remove('hidden');
+
+            showModal("Estudio Finalizado", "Todas las tareas se han detenido. Pulsa INICIO para empezar un nuevo estudio.");
+        }
+
+
+        // --- Lógica de Tarea ---
+        
+        function handleTaskClick(taskName, taskColor) {
+            if (!isStudyActive) {
+                showModal("Estudio Inactivo", "Debes pulsar 'INICIO' para comenzar a registrar el tiempo.");
+                return;
+            }
+
+            const now = new Date();
+            const nowTimestamp = now.getTime();
+            let activities = loadActivities();
+            
+            // 1. DETENER la tarea ACTIVA previa (Si existe)
+            if (activeTask) {
+                stopAndSaveActiveTask(now, activities);
+            }
+
+            // 2. INICIAR la nueva tarea
+            const taskInfo = CURRENT_TASKS.find(t => t.name === taskName);
+
+            const newTaskData = {
+                id: Date.now().toString() + Math.random().toString(16).slice(2),
+                taskName: taskName,
+                startTime: nowTimestamp,
+                endTime: null,
+                durationMs: 0,
+                status: "Activa",
+                color: taskColor,
+                category: taskInfo ? taskInfo.category : 'N/A', // Guardar categoría
+                timestamp: nowTimestamp
+            };
+
+            activities.push(newTaskData);
+
+            // 3. Guardar estado local
+            saveActivities(activities);
+            activeTask = {
+                name: taskName,
+                startTime: nowTimestamp,
+                color: taskColor
+            };
+            
+            // 4. Actualizar la interfaz
+            updateUIForActiveTask(activeTask.name, now);
+            renderTaskList(activities);
+        }
+
+        // --- Funciones de UI ---
+        
+        function updateControlButtons() { /* ... Lógica existente ... */
+            const startBtn = document.getElementById('start-btn');
+            const endBtn = document.getElementById('end-btn');
+            const exportBtn = document.getElementById('export-btn');
+            const exportGraphBtn = document.getElementById('export-graph-btn');
+            const globalStatusDisplay = document.getElementById('global-status');
+            const taskButtons = document.querySelectorAll('.task-btn');
+            
+            startBtn.disabled = isStudyActive;
+            endBtn.disabled = !isStudyActive;
+            exportBtn.disabled = isStudyActive;
+            exportGraphBtn.disabled = isStudyActive;
+            
+            if (isStudyActive) {
+                globalStatusDisplay.textContent = "ACTIVO";
+                globalStatusDisplay.className = 'text-green-600 font-extrabold';
+                taskButtons.forEach(btn => btn.disabled = false);
+            } else {
+                globalStatusDisplay.textContent = "INACTIVO";
+                globalStatusDisplay.className = 'text-red-600 font-extrabold';
+                taskButtons.forEach(btn => btn.disabled = true);
+            }
+
+            const selectedNameDisplay = document.getElementById('selected-task-name');
+            if (activeTask && isStudyActive) {
+                selectedNameDisplay.textContent = activeTask.name;
+                selectedNameDisplay.classList.add('text-red-600', 'font-extrabold');
+                selectedNameDisplay.classList.remove('text-indigo-700', 'font-bold', 'text-gray-400');
+            } else if (isStudyActive && !activeTask) {
+                 selectedNameDisplay.textContent = "Esperando Primera Tarea...";
+                 selectedNameDisplay.className = 'text-xl font-bold text-indigo-700';
+            } else {
+                selectedNameDisplay.textContent = "Ninguna";
+                selectedNameDisplay.className = 'text-xl font-bold text-gray-400';
+            }
+
+            document.querySelectorAll('.task-btn').forEach(btn => {
+                btn.classList.remove('btn-active');
+                btn.classList.add('shadow-md'); 
+            });
+
+            if (activeTask) {
+                const activeBtn = document.querySelector(`[data-task-name="${activeTask.name}"]`);
+                if(activeBtn) {
+                    activeBtn.classList.add('btn-active');
+                    activeBtn.classList.remove('shadow-md');
+                }
+            }
+        }
+
+        function updateUIForActiveTask(taskName, startTime) { /* ... Lógica existente ... */
+            document.getElementById('active-task-name').textContent = taskName;
+            document.getElementById('active-task-time').textContent = startTime.toLocaleTimeString('es-ES');
+            document.getElementById('active-task-card').classList.remove('hidden');
+
+            if (intervalId) clearInterval(intervalId);
+
+            intervalId = setInterval(() => {
+                const activities = loadActivities();
+                if (!activeTask) {
+                    // Si el activeTask se perdió (por error), limpiar y detener el intervalo.
+                    clearInterval(intervalId);
+                    updateUIForStop();
+                    return;
+                }
+                const elapsedMs = new Date().getTime() - activeTask.startTime;
+                document.getElementById('active-task-duration').textContent = formatDuration(elapsedMs);
+                updateControlButtons();
+                renderTaskList(activities); // Actualizar resumen acumulado
+                renderGanttChart(activities); // NUEVO: Actualizar el gráfico cada segundo
+            }, 1000);
+            
+            updateControlButtons();
+        }
+        
+        function updateUIForStop() { /* ... Lógica existente ... */
+            if (intervalId) clearInterval(intervalId);
+            document.getElementById('active-task-card').classList.add('hidden');
+            activeTask = null;
+            updateControlButtons();
+        }
+
+
+        function renderTaskList(allActivities) { /* ... Lógica existente ... */
+            const list = document.getElementById('activity-list');
+            list.innerHTML = '';
+            
+            const accumulatedData = getAccumulatedData(allActivities);
+
+            // 1. Renderizar el total acumulado por tarea
+            accumulatedData.forEach(data => {
+                const totalDuration = formatDuration(data.totalDurationMs);
+                const li = document.createElement('li');
+                li.className = 'p-3 bg-white rounded-lg shadow-sm mb-2 flex justify-between items-center border-l-4 border-gray-400';
+                
+                // Lógica de color de borde
+                const colorCode = data.color.match(/bg-(\w+)-/)?.[1] || 'gray';
+                let borderColor = '#9CA3AF'; 
+                if (colorCode.includes('red') || colorCode.includes('rose')) borderColor = '#F87171';
+                else if (colorCode.includes('green') || colorCode.includes('emerald')) borderColor = '#4ADE80';
+                else if (colorCode.includes('blue') || colorCode.includes('sky')) borderColor = '#60A5FA';
+                else if (colorCode.includes('yellow') || colorCode.includes('amber')) borderColor = '#FCD34D';
+                else if (colorCode.includes('teal')) borderColor = '#2DD4BF';
+                else if (colorCode.includes('indigo')) borderColor = '#818CF8';
+
+
+                li.style.borderColor = borderColor;
+
+                li.innerHTML = `
+                    <div class="flex flex-col">
+                        <span class="font-semibold text-gray-800">${data.taskName}</span>
+                        <span class="text-xs text-gray-500">
+                            Hitos registrados: ${data.count} | Categoría: ${data.category}
+                        </span>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-xs font-semibold text-gray-500">TIEMPO TOTAL</span>
+                        <p class="font-bold text-lg text-indigo-600">${totalDuration}</p>
+                    </div>
+                `;
+                list.appendChild(li);
+            });
+            document.getElementById('history-count').textContent = accumulatedData.length;
+
+            if (accumulatedData.length === 0) {
+                list.innerHTML = '<li class="p-3 text-center text-gray-500 bg-white rounded-lg shadow-sm">No hay actividades recientes registradas.</li>';
+            }
+        }
+        
+        /**
+         * Determina el dominio de tiempo para la visualización en tiempo real (Ventana Fija de 5 Minutos).
+         */
+        function calculateFixedWindowDomain() {
+            const totalElapsedMs = new Date().getTime() - studyStartTime;
+
+            // Calcula el inicio del bloque de 5 minutos actual (ej: 0, 300000, 600000...)
+            const blockStartMs = Math.floor(totalElapsedMs / FIXED_WINDOW_MS) * FIXED_WINDOW_MS;
+            
+            // xMin es el timestamp absoluto del inicio del bloque actual
+            const xMin = studyStartTime + blockStartMs;
+            
+            // xMax es el tiempo actual o el final del bloque (xMin + 5 minutos)
+            let xMax = new Date().getTime();
+            const xMaxBoundary = xMin + FIXED_WINDOW_MS;
+
+            // Si el estudio está activo, la ventana se estira hasta el tiempo actual dentro del bloque, 
+            // pero el eje X debe representar el bloque completo de 5 minutos para mantener la proporcionalidad.
+            if (!isStudyActive || xMax > xMaxBoundary) {
+                xMax = xMaxBoundary;
+            }
+
+            // Si el estudio es muy corto, aseguramos que el dominio sea al menos 1s para D3
+            if (xMax <= xMin) xMax = xMin + 1000;
+
+            return { xMin, xMax: xMaxBoundary }; // xMaxBoundary fuerza la ventana a ser siempre de 5 minutos de ancho
+        }
+
+        // --- NUEVO: FUNCIONES DE GRÁFICO D3.js ---
+
+        function renderGanttChart(allActivities, isFullExport = false) {
+            const container = document.getElementById('gantt-chart-container');
+            
+            if (!studyStartTime) {
+                container.innerHTML = '<p class="text-center text-gray-500 mt-4">Pulsa INICIO para empezar a generar el gráfico.</p>';
+                return;
+            }
+            
+            try {
+                const activitiesData = allActivities.map(a => {
+                    let endTime = a.endTime || new Date().getTime();
+                    if (a.status === 'Activa') {
+                        endTime = new Date().getTime();
+                    }
+                    
+                    const duration = endTime - a.startTime;
+                    const taskInfo = CURRENT_TASKS.find(t => t.name === a.taskName);
+
+                    return {
+                        id: a.id,
+                        taskName: a.taskName,
+                        startTime: a.startTime,
+                        endTime: endTime,
+                        durationMs: duration,
+                        color: a.color,
+                        category: taskInfo ? taskInfo.category : 'N/A',
+                        group: CATEGORY_GROUPS[taskInfo?.category] || 'No Clasificado'
+                    };
+                }).filter(a => a.durationMs >= 0); 
+                
+                if (activitiesData.length === 0 && !isFullExport) {
+                    d3.select("#gantt-chart").remove();
+                    container.innerHTML = '<p class="text-center text-gray-500 mt-4">Esperando la primera tarea...</p>';
+                    return;
+                }
+
+                // --- Dimensiones y Agrupación ---
+                const containerWidth = container.clientWidth;
+                const width = Math.max(containerWidth, 600) - MARGIN.left - MARGIN.right;
+                
+                // 2. DEFINICIÓN DEL DOMINIO DEL EJE X (CRÍTICO)
+                let xMin, xMax;
+                
+                if (isFullExport) {
+                    // MODO EXPORTACIÓN: Mostrar todo el estudio (0 al tiempo final)
+                    xMin = studyStartTime;
+                    xMax = activitiesData.length > 0 ? activitiesData[activitiesData.length - 1].endTime : new Date().getTime();
+                    if (isStudyActive) xMax = new Date().getTime(); 
+                } else {
+                    // MODO TIEMPO REAL: Ventana Fija de 5 minutos
+                    const domain = calculateFixedWindowDomain();
+                    xMin = domain.xMin;
+                    xMax = domain.xMax; 
+                }
+
+                // Agrupar y ordenar tareas
+                const accumulatedTimes = getAccumulatedData(allActivities); // Usar allActivities para calcular totales
+                const accumulatedMap = new Map(accumulatedTimes.map(item => [item.taskName, item.totalDurationMs]));
+
+                let tasksToDisplay = CURRENT_TASKS
+                    .map(t => ({ 
+                        ...t, 
+                        group: CATEGORY_GROUPS[t.category] || 'No Clasificado',
+                        totalMs: accumulatedMap.get(t.name) || 0
+                    }));
+                
+                // Solo filtrar si el estudio NO está activo o es exportación
+                if (!isStudyActive || isFullExport) {
+                    tasksToDisplay = tasksToDisplay.filter(t => t.totalMs > 0); 
+                }
+                
+                // Ordenar tareas
+                tasksToDisplay.sort((a, b) => {
+                    const groupOrder = CATEGORY_GROUPS[b.category].localeCompare(CATEGORY_GROUPS[a.category]);
+                    if (groupOrder !== 0) return groupOrder;
+                    return a.name.localeCompare(b.name);
+                });
+
+                const groupedTasks = tasksToDisplay; 
+                const taskNames = groupedTasks.map(t => t.name);
+                
+                // Calcular altura total, incluyendo espacio extra para etiquetas de grupo
+                const groupBreakCount = new Set(groupedTasks.map(t => t.group)).size - 1;
+                const groupExtraSpace = groupBreakCount * 30; // 30px extra por cada separación de grupo
+                
+                const height = Math.max(50, taskNames.length * (BAR_HEIGHT + 5) + groupExtraSpace);
+
+
+                // --- Escalas ---
+                const xScale = d3.scaleLinear()
+                    .domain([xMin, xMax])
+                    .range([0, width]);
+
+                const yScale = d3.scaleBand()
+                    .domain(taskNames)
+                    .range([0, height])
+                    .paddingInner(0.1);
+                
+                // --- Limpiar y Crear SVG ---
+                // Si es un render normal (no export), limpiamos el contenedor
+                if (!isFullExport) {
+                    d3.select("#gantt-chart").remove();
+                    
+                    const svg = d3.select(container)
+                        .append("svg")
+                        .attr("id", "gantt-chart")
+                        .attr("width", width + MARGIN.left + MARGIN.right)
+                        .attr("height", height + MARGIN.top + MARGIN.bottom + 10) 
+                        .append("g")
+                        .attr("transform", `translate(${MARGIN.left}, ${MARGIN.top})`);
+                    
+                    // Retornar el elemento SVG para el flujo de dibujo
+                    return drawChartElements(svg, groupedTasks, activitiesData, xScale, yScale, width, height, xMax, xMin, isFullExport);
+
+                } else {
+                    // MODO EXPORTACIÓN: Devolver solo el string SVG
+                    const tempSvgContainer = d3.create("svg")
+                        .attr("width", width + MARGIN.left + MARGIN.right)
+                        .attr("height", height + MARGIN.top + MARGIN.bottom + 10);
+                    
+                    const svg = tempSvgContainer.append("g")
+                        .attr("transform", `translate(${MARGIN.left}, ${MARGIN.top})`);
+
+                    drawChartElements(svg, groupedTasks, activitiesData, xScale, yScale, width, height, xMax, xMin, isFullExport);
+                    
+                    // Serializar y devolver el string SVG completo
+                    const serializer = new XMLSerializer();
+                    return serializer.serializeToString(tempSvgContainer.node());
+                }
+            } catch (e) {
+                console.error("Error al renderizar el gráfico:", e);
+                container.innerHTML = `<p class="text-center text-red-600 font-bold mt-4">Error al cargar el gráfico: ${e.message}</p>`;
+            }
+        }
+        
+        // --- FUNCIÓN CENTRAL DE DIBUJO ---
+        function drawChartElements(svg, groupedTasks, activitiesData, xScale, yScale, width, height, xMax, xMin, isFullExport) {
+            
+            // --- 1. CÁLCULO DEL GRAN TOTAL ---
+            let totalMs = 0;
+            const nowTime = new Date().getTime();
+
+            activitiesData.forEach(item => {
+                const duration = item.status === 'Activa' ? (nowTime - item.startTime) : item.durationMs;
+                totalMs += duration;
+            });
+            
+            const grandTotalDuration = formatDuration(totalMs);
+
+
+            // --- 2. DIBUJAR EJE X (ESCALA DE TIEMPO Y GRID) ---
+            
+            // Definir el intervalo de la escala (1 minuto)
+            const tickInterval = d3.timeMinute.every(1);
+            
+            // Eje X con formato de tiempo
+            const xAxis = d3.axisTop(xScale)
+                .tickFormat(d => {
+                    if (isFullExport) return d3.timeFormat("%H:%M:%S")(new Date(d));
+                    
+                    // Vista en tiempo real: mostrar el tiempo relativo del bloque
+                    const relativeMs = d.getTime() - xMin;
+                    const relativeSec = Math.round(relativeMs / 1000);
+                    const minutes = Math.floor(relativeSec / 60);
+                    const seconds = relativeSec % 60;
+                    return `${minutes}m ${seconds}s`;
+                })
+                .tickValues(xScale.ticks(tickInterval))
+                .tickSize(height); 
+
+            // Dibujar el eje
+            svg.append("g")
+                .attr("class", "x-axis")
+                .call(xAxis)
+                .selectAll("line")
+                .attr("class", "grid-line-dot"); // Aplicar clase para punteado
+
+            svg.select(".x-axis path").remove(); 
+            svg.select(".x-axis").attr("font-size", "10px").attr("fill", "#6B7280");
+            
+            // --- Etiquetas de Minuto (8 Segmentos) ---
+            svg.select(".x-axis")
+                .selectAll(".tick")
+                .each(function(d) {
+                    const tickElement = d3.select(this);
+                    
+                    // El tick de inicio (xMin) y los ticks de minuto deben tener etiquetas
+                    const tickTime = d.getTime();
+
+                    // Forzar que solo 8 segmentos (7 líneas) sean visibles
+                    const minutesFromBlockStart = Math.round((tickTime - xMin) / MINUTE_MS);
+                    if (minutesFromBlockStart > 5 && !isFullExport) {
+                         tickElement.remove();
+                         return;
+                    }
+                    
+                    // Reposicionar etiqueta
+                    tickElement.select("text").attr("y", -30);
+                });
+            
+            // --- DIBUJAR LÍNEAS DISCONTINUAS INTERMEDIAS (8 Segmentos) ---
+            if (!isFullExport && groupedTasks.length > 0) {
+                const totalVisibleDuration = xMax - xMin;
+                const segmentCount = 8;
+                const segmentDuration = totalVisibleDuration / segmentCount;
+                
+                // Dibujar 7 líneas (para 8 segmentos)
+                for (let i = 1; i < segmentCount; i++) {
+                    const lineTime = xMin + i * segmentDuration;
+                    
+                    svg.append("line")
+                        .attr("x1", xScale(lineTime))
+                        .attr("x2", xScale(lineTime))
+                        .attr("y1", 0)
+                        .attr("y2", height)
+                        .attr("class", "grid-line-dot"); 
+                }
+            }
+            
+            
+            // --- 3. DIBUJAR BARRAS Y EJE Y (TAREAS Y GRUPOS) ---
+            
+            const yOffsetMap = {};
+            let currentOffset = 0;
+            let currentGroup = '';
+
+            // Calcular los offsets para cada tarea debido a las separaciones de grupo
+            groupedTasks.forEach((task, index) => {
+                if (task.group !== currentGroup) {
+                    if (index > 0) {
+                        currentOffset += 30; 
+                    }
+                    currentGroup = task.group;
+                }
+                yOffsetMap[task.name] = yScale(task.name) + currentOffset;
+            });
+
+            // Dibujar las etiquetas de grupo y separadores
+            let drawnGroups = new Set();
+            groupedTasks.forEach((task, index) => {
+                const groupName = task.group;
+                const taskY = yOffsetMap[task.name];
+
+                if (!drawnGroups.has(groupName)) {
+                    // Posicionar la etiqueta de grupo
+                    const groupLabelY = taskY - (index > 0 ? 15 : 10);
+                    
+                    if (index > 0) {
+                         svg.append("line")
+                            .attr("x1", 0)
+                            .attr("x2", width)
+                            .attr("y1", groupLabelY - 5)
+                            .attr("y2", groupLabelY - 5)
+                            .attr("stroke", "#D1D5DB")
+                            .attr("stroke-width", 2);
+                    }
+
+                    // Etiqueta del Grupo
+                    svg.append("text")
+                        .attr("x", 0)
+                        .attr("y", groupLabelY)
+                        .attr("text-anchor", "start")
+                        .attr("fill", "#4B5563")
+                        .attr("font-size", "11px")
+                        .attr("font-weight", "bold")
+                        .text(groupName.toUpperCase());
+
+                    drawnGroups.add(groupName);
+                }
+
+                 // Nombres de las tareas (Eje Y)
+                svg.append("text")
+                    .attr("class", "task-label")
+                    .attr("x", -LABEL_MARGIN) 
+                    .attr("y", taskY + yScale.bandwidth() / 2)
+                    .attr("dy", "0.35em") 
+                    .attr("text-anchor", "end")
+                    .text(task.name);
+            });
+
+
+            // Dibujar las barras de actividad
+            svg.selectAll(".task-bar")
+                // Filtrar actividades que caen dentro del dominio visible
+                .data(activitiesData.filter(d => d.endTime > xMin), d => d.id) 
+                .join("rect")
+                .attr("class", "task-bar rounded-md shadow-sm")
+                // Ajuste para el inicio de la barra que está fuera del rango visible
+                .attr("x", d => xScale(Math.max(xMin, d.startTime)))
+                .attr("y", d => yOffsetMap[d.taskName])
+                .attr("width", d => Math.max(0, xScale(Math.min(xMax, d.endTime)) - xScale(Math.max(xMin, d.startTime))))
+                .attr("height", BAR_HEIGHT)
+                .attr("fill", d => COLOR_MAP[d.color.split(' ')[0]] || '#9CA3AF') 
+                .on("mouseover", (event, d) => {
+                    d3.select("#tooltip")
+                        .style("opacity", 1)
+                        .html(`<strong>${d.taskName}</strong><br>Duración: ${formatDuration(d.durationMs)}<br>Inicio: ${new Date(d.startTime).toLocaleTimeString('es-ES')}`)
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    d3.select("#tooltip").style("opacity", 0);
+                });
+
+            // --- 4. COLUMNA DE TIEMPO TOTAL ACUMULADO (A la derecha) ---
+            const totalColX = width + 20; 
+            
+            // Título de la columna Total
+            svg.append("text")
+                .attr("x", totalColX)
+                .attr("y", -20)
+                .attr("text-anchor", "start")
+                .attr("fill", "#1E40AF") 
+                .attr("font-size", "11px")
+                .attr("font-weight", "bold")
+                .text("TIEMPO TOTAL");
+
+            // NUEVO: Valor del Gran Total (primera fila debajo del título)
+            // CAMBIO AQUÍ: Solo el tiempo
+            svg.append("text")
+                .attr("x", totalColX)
+                .attr("y", -5)
+                .attr("text-anchor", "start")
+                .attr("fill", "#059669") // Color Verde
+                .attr("font-size", "12px")
+                .attr("font-weight", "bold")
+                .text(`${grandTotalDuration}`); // Solo el tiempo
+
+            // Valores de la columna Total
+            groupedTasks.forEach(task => {
+                const totalDuration = formatDuration(task.totalMs);
+                svg.append("text")
+                    .attr("x", totalColX)
+                    .attr("y", yOffsetMap[task.name] + BAR_HEIGHT / 2)
+                    .attr("dy", "0.35em")
+                    .attr("text-anchor", "start")
+                    .attr("fill", "#1E40AF")
+                    .attr("font-size", "10px")
+                    .attr("font-weight", "bold")
+                    .text(totalDuration);
+            });
+            
+            // Asegurar que el tooltip existe
+            if (!d3.select("#tooltip").node()) {
+                d3.select("body").append("div")
+                    .attr("id", "tooltip")
+                    .style("position", "absolute")
+                    .style("background-color", "rgba(0,0,0,0.8)")
+                    .style("color", "white")
+                    .style("padding", "5px")
+                    .style("border-radius", "4px")
+                    .style("pointer-events", "none")
+                    .style("opacity", 0);
+            }
+            
+            return svg; // Devuelve el objeto SVG si es render normal
+        }
+        
+        // --- FUNCIÓN PARA EXPORTAR GRÁFICO COMPLETO (SVG) ---
+        function exportGanttChart() {
+            const activities = loadActivities();
+            if (activities.length === 0) {
+                 showModal("Sin Datos", "No hay actividades registradas para exportar el gráfico.");
+                 return;
+            }
+            
+            // 1. Generar el SVG con la escala COMPLETA (isFullExport = true)
+            const svgString = renderGanttChart(activities, true);
+            
+            if (!svgString) {
+                 showModal("Error de Gráfico", "Fallo al generar el gráfico completo para la exportación.");
+                 return;
+            }
+
+            // 2. Obtener las dimensiones del SVG generado (estimadas o reales del DOM si existiera)
+            const width = document.getElementById('gantt-chart-container').clientWidth;
+            
+            // 3. Modificar el string SVG para exportación (añadir fondo blanco y estilos)
+            const finalSvgString = svgString
+                // Asegurar fondo blanco y namespaces
+                .replace('<svg', `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width + 300}" height="auto" style="background-color: white;">`);
+            
+            // 4. Crear el Blob y forzar la descarga
+            const blob = new Blob([finalSvgString], {type: 'image/svg+xml;charset=utf-8'});
+            const url = URL.createObjectURL(blob);
+            
+            const link = document.createElement('a');
+            link.download = `${csvFileName}_GANTT_FULL.svg`;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            
+            showModal("Exportación Exitosa", `Gráfico completo guardado como ${csvFileName}_GANTT_FULL.svg. **Nota:** Exportado en formato SVG para máxima calidad.`);
+        }
+
+
+        // Función para exportar datos a CSV
+        function exportToCSV() { /* ... Lógica existente ... */
+            const data = loadActivities();
+            
+            if (data.length === 0) {
+                 showModal("Sin Datos", "No hay actividades para exportar. Inicia un estudio y registra al menos una tarea.");
+                 return;
+            }
+
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('es-ES').split('/').join('-');
+            const timeStr = now.toLocaleTimeString('es-ES', { hour12: false }).replace(/:/g, '');
+
+            csvFileName = `${studyName.toUpperCase()}_${studyRole.toUpperCase()}_${dateStr}_${timeStr}`
+                .replace(/ /g, '_')
+                .replace(/"/g, '');
+            
+            
+            const separator = ';'; 
+            let csvContent = "";
+            
+            // --- METADATOS DEL ESTUDIO EN EL CSV ---
+            csvContent += ["METADATOS DEL ESTUDIO:", "", "", "", "", ""].join(separator) + "\n";
+            csvContent += ["NOMBRE", studyName].map(field => `"${field}"`).join(separator) + "\n";
+            csvContent += ["PUESTO", studyRole].map(field => `"${field}"`).join(separator) + "\n";
+            csvContent += ["FECHA_HORA_INICIO_ESTUDIO", new Date(studyStartTime).toLocaleString('es-ES')].map(field => `"${field}"`).join(separator) + "\n"; // Añadido tiempo de inicio global
+            csvContent += ["FECHA_HORA_FIN", now.toLocaleString('es-ES')].map(field => `"${field}"`).join(separator) + "\n";
+            csvContent += ["EMAIL_GUARDADO", studyEmail].map(field => `"${field}"`).join(separator) + "\n"; 
+            csvContent += "\n";
+            
+            // --- BLOQUE 1: DATOS SECUENCIALES DETALLADOS (Base para el Gráfico) ---
+            
+            const sequentialHeaders = ["SECCION: DETALLE SECUENCIAL", "", "", "", "", "", "", "", "", "", "", "", ""];
+            csvContent += sequentialHeaders.join(separator) + "\n";
+            
+            const detailHeaders = ["ID", "Tarea", "Categoría", "Grupo (Valor/No Valor)", "Inicio (Timestamp MS)", "Fin (Timestamp MS)", "Inicio (Fecha Hora)", "Fin (Fecha Hora)", "Duración (ms)", "Duración (HH:MM:SS)", "Estado"];
+            csvContent += detailHeaders.join(separator) + "\n";
+            
+            data.forEach(item => {
+                if (item.status === 'Activa' || !item.endTime) return; 
+
+                const startTimeDate = new Date(item.startTime);
+                const endTimeDate = new Date(item.endTime);
+                
+                const startTimeFormatted = startTimeDate.toLocaleString('es-ES');
+                const endTimeFormatted = endTimeDate.toLocaleString('es-ES');
+                const durationFormatted = formatDuration(item.durationMs);
+                
+                const category = item.category || CURRENT_TASKS.find(t => t.name === item.taskName)?.category || 'N/A';
+                const group = CATEGORY_GROUPS[category] || 'No Clasificado';
+                
+                const row = [
+                    item.id,
+                    item.taskName,
+                    category,
+                    group,
+                    item.startTime,
+                    item.endTime,
+                    startTimeFormatted,
+                    endTimeFormatted,
+                    item.durationMs,
+                    durationFormatted,
+                    item.status
+                ].map(field => `"${field}"`).join(separator); 
+                
+                csvContent += row + "\n";
+            });
+            
+            // Añadir un salto de línea grande para separación
+            csvContent += "\n\n";
+            
+            // --- BLOQUE 2: DATOS ACUMULADOS POR TAREA (con Min, Max, Avg) ---
+            
+            const accumulatedHeaders = ["SECCION: RESUMEN ACUMULADO POR TAREA", "", "", "", "", "", ""];
+            csvContent += accumulatedHeaders.join(separator) + "\n";
+            
+            const summaryHeaders = [
+                "Tarea", 
+                "Categoría", 
+                "Hitos (Veces Pulsada)", 
+                "Duración Total (ms)", 
+                "Duración Total (HH:MM:SS)",
+                "Tiempo Promedio (HH:MM:SS)",
+                "Tiempo Mínimo (HH:MM:SS)",
+                "Tiempo Máximo (HH:MM:SS)"
+            ];
+            csvContent += summaryHeaders.join(separator) + "\n";
+            
+            const activitiesForSummary = data.filter(a => a.status === 'Completada');
+            const accumulatedData = getAccumulatedData(activitiesForSummary);
+            
+            accumulatedData.forEach(item => {
+                const totalDurationFormatted = formatDuration(item.totalDurationMs);
+                const avgDurationFormatted = formatDurationWithMilliseconds(item.averageDurationMs);
+                const minDurationFormatted = formatDurationWithMilliseconds(item.minDurationMs);
+                const maxDurationFormatted = formatDurationWithMilliseconds(item.maxDurationMs);
+                
+                const row = [
+                    item.taskName,
+                    item.category,
+                    item.count,
+                    item.totalDurationMs,
+                    totalDurationFormatted,
+                    avgDurationFormatted,
+                    minDurationFormatted,
+                    maxDurationFormatted
+                ].map(field => `"${field}"`).join(separator); 
+                
+                csvContent += row + "\n";
+            });
+
+
+            // --- DESCARGA ---
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', `${csvFileName}.csv`); 
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            // --- AVISO DE CORREO AUTOMÁTICO ---
+            if (studyEmail) {
+                openEmailPromptModal(csvFileName);
+            } else {
+                 showModal("Exportación Exitosa", `Archivo guardado como ${csvFileName}.csv. Contiene el detalle secuencial y el resumen acumulado.`);
+            }
+        }
+        
+        // --- Funciones de Modales (Sin cambios en esta versión) ---
+        function showModal(title, message) { /* ... Lógica existente ... */
+            const modal = document.getElementById('message-modal');
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-title').classList.toggle('text-red-600', title.includes('Error') || title.includes('Inactivo') || title.includes('Fallo'));
+            document.getElementById('modal-title').classList.toggle('text-indigo-600', !title.includes('Error') && !title.includes('Inactivo') && !title.includes('Fallo'));
+
+            document.getElementById('modal-message').textContent = message;
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('message-modal').classList.add('hidden');
+        }
+        
+        function openSettingsModal() {
+            loadListsAndEmail();
+            renderSettingsLists();
+            document.getElementById('settings-modal').classList.remove('hidden');
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settings-modal').classList.add('hidden');
+            if (!isStudyActive) {
+                openDataCaptureModal();
+                document.getElementById('data-capture-modal').classList.add('hidden'); 
+            }
+        }
+        
+        function openEmailPromptModal(fileName) {
+            const modal = document.getElementById('email-prompt-modal');
+            document.getElementById('email-prompt-recipient').textContent = studyEmail;
+            document.getElementById('email-prompt-file').textContent = `${fileName}.csv`;
+            modal.classList.remove('hidden');
+        }
+        
+        function closeEmailPromptModal() {
+            document.getElementById('email-prompt-modal').classList.add('hidden');
+        }
+
+        function launchEmailClient() {
+            const subject = encodeURIComponent(`REGISTRO DE TAREAS - Datos de Actividad: ${csvFileName}`);
+            const body = encodeURIComponent(`Adjunto encontrará el registro de actividades LEAN en formato CSV. Recuerde adjuntar el archivo:\n\nNombre de archivo: ${csvFileName}.csv\nGuardado por: ${studyName}\nPuesto: ${studyRole}`);
+            
+            const mailtoLink = `mailto:${studyEmail}?subject=${subject}&body=${body}`;
+            
+            window.open(mailtoLink, '_blank');
+            
+            closeEmailPromptModal();
+            showModal("Acción de Correo", "Se ha abierto tu aplicación de correo. **Recuerda adjuntar el archivo CSV** que acabas de descargar.");
+        }
+
+
+        // --- Configuración Inicial ---
+        window.setupApp = function() {
+            loadListsAndEmail(); 
+
+            // 1. Crear los botones de tarea dinámicamente
+            const buttonContainer = document.getElementById('task-buttons');
+            buttonContainer.innerHTML = '';
+            CURRENT_TASKS.forEach(task => {
+                const button = document.createElement('button');
+                button.textContent = task.name;
+                button.className = `task-btn ${task.color} text-white font-bold py-4 px-2 rounded-xl shadow-md transition duration-150 ease-in-out transform active:scale-95 text-xs md:text-sm`;
+                button.dataset.taskName = task.name;
+                button.onclick = () => handleTaskClick(task.name, task.color);
+                buttonContainer.appendChild(button);
+            });
+            
+            // 2. Asignar los handlers de control
+            document.getElementById('start-btn').onclick = startStudy;
+            document.getElementById('end-btn').onclick = endStudy;
+            document.getElementById('export-btn').onclick = exportToCSV;
+            document.getElementById('export-graph-btn').onclick = exportGanttChart; 
+            
+            document.getElementById('capture-name-role-btn').onclick = handleDataCapture;
+            document.getElementById('name-select').onchange = handleNameSelectChange;
+            document.getElementById('role-select').onchange = handleRoleSelectChange;
+
+            // 3. Asignar handlers al nuevo modal de AJUSTES
+            document.getElementById('settings-add-name-btn').onclick = addName;
+            document.getElementById('settings-remove-name-btn').onclick = removeName;
+            document.getElementById('settings-add-role-btn').onclick = addRole;
+            document.getElementById('settings-remove-role-btn').onclick = removeRole;
+            document.getElementById('settings-add-task-btn').onclick = addTask;
+            document.getElementById('settings-remove-task-btn').onclick = removeTask;
+            document.getElementById('settings-email-save-btn').onclick = handleEmailSave;
+            document.getElementById('close-settings-modal-btn').onclick = closeSettingsModal;
+            document.getElementById('settings-icon-btn').onclick = openSettingsModal;
+            
+            // 4. Asignar handlers al nuevo modal de CORREO (y mensaje general)
+            document.getElementById('email-prompt-close-btn').onclick = closeEmailPromptModal;
+            document.getElementById('launch-email-btn').onclick = launchEmailClient;
+            document.getElementById('close-modal-btn').onclick = closeModal; 
+            
+            // 5. Cargar datos iniciales y revisar si hay tarea activa
+            const activities = loadActivities();
+            checkActiveTaskOnLoad(activities);
+            renderTaskList(activities);
+            renderGanttChart(activities); // Renderizar al inicio (mostrará un mensaje si está inactivo)
+        };
+
+        // Asignar listeners y configurar la app al cargar el DOM
+        document.addEventListener('DOMContentLoaded', () => {
+            try {
+                window.setupApp();
+            } catch (e) {
+                console.error("Error crítico durante la inicialización:", e);
+                // Mostrar un mensaje de error visible en la UI
+                const errorHtml = `
+                    <div class="p-8 text-center text-red-700 bg-red-100 border border-red-300 rounded-xl m-4">
+                        <h2 class="text-2xl font-bold mb-2">¡ERROR CRÍTICO!</h2>
+                        <p class="mb-2">La aplicación no pudo cargarse debido a un fallo en el código.</p>
+                        <p class="text-sm">Por favor, verifica el archivo y los detalles en la consola.</p>
+                        <p class="mt-2 text-xs font-mono break-all">Detalles: ${e.message}</p>
+                    </div>
+                `;
+                document.body.innerHTML = errorHtml;
+            }
+        });
+
+    </script>
+</head>
+<body class="p-4">
+
+    <!-- Encabezado y Estado Local -->
+    <header class="mb-4 text-center relative">
+        <h1 class="text-2xl font-bold text-indigo-700">REGISTRO DE TAREAS</h1>
+        <p class="text-sm text-gray-500 truncate mt-1">Modo: Datalogger Local (Offline)</p>
+        <!-- BOTÓN DE AJUSTES (Ruedecita) -->
+        <button id="settings-icon-btn" class="absolute top-0 right-0 p-2 text-gray-700 hover:text-indigo-800 transition duration-150 rounded-full">
+            <!-- SVG personalizado para la rueda de engranaje con centro azul/gris -->
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24">
+                <!-- Fondo del engranaje (gris) -->
+                <path fill="#4B5563" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.21 16.51l-.42 1.35H9.69l-.42-1.35c-1.42-.51-2.61-1.41-3.48-2.58l-1.29.58-.69-1.2 1.29-.58c-.14-.49-.23-.99-.23-1.5s.09-1.01.23-1.5l-1.29-.58.69-1.2 1.29.58c.87-1.17 2.06-2.07 3.48-2.58l.42-1.35h2.82l.42 1.35c1.42.51 2.61 1.41 3.48 2.58l1.29-.58.69 1.2-1.29.58c.14.49.23.99.23 1.5s-.09 1.01-.23 1.5l1.29.58-.69 1.2-1.29-.58c-.87 1.17-2.06 2.07-3.48 2.58z"/>
+                <!-- Centro de la rueda (azul) -->
+                <circle cx="12" cy="12" r="3" fill="#3B82F6"/> 
+                <!-- Pequeños círculos para los dientes (opcional, para mayor detalle) -->
+                <circle cx="12" cy="3" r="1" fill="#4B5563"/>
+                <circle cx="12" cy="21" r="1" fill="#4B5563"/>
+                <circle cx="3" cy="12" r="1" fill="#4B5563"/>
+                <circle cx="21" cy="12" r="1" fill="#4B5563"/>
+                <circle cx="5.3" cy="5.3" r="1" fill="#4B5563"/>
+                <circle cx="18.7" cy="18.7" r="1" fill="#4B5563"/>
+                <circle cx="5.3" cy="18.7" r="1" fill="#4B5563"/>
+                <circle cx="18.7" cy="5.3" r="1" fill="#4B5563"/>
+            </svg>
+        </button>
+    </header>
+    
+    <!-- Metadatos del Estudio (Siempre visibles) -->
+    <div class="bg-indigo-100 p-3 rounded-xl shadow-inner mb-4 text-center text-sm">
+        <p class="font-semibold text-indigo-800">Estudio Actual:</p>
+        <p>Nombre: <span id="current-study-name" class="font-bold text-gray-800">DESCONOCIDO</span></p>
+        <p>Puesto: <span id="current-study-role" class="font-bold text-gray-800">SIN_PUESTO</span></p>
+        <p class="text-xs text-gray-600 mt-1">Email: <span id="current-email-display" class="font-bold text-gray-700">No configurado</span></p>
+    </div>
+
+    <!-- Control Centralizado y Tarea Seleccionada -->
+    <div class="flex flex-col items-center p-4 bg-white rounded-xl shadow-lg mb-6 border-b-4 border-indigo-200">
+        <div class="mb-4 text-center">
+            <p class="text-sm text-gray-500">Estado del Estudio:</p>
+            <p id="global-status" class="text-xl font-bold text-red-600">INACTIVO</p>
+        </div>
+        <div class="mb-4 text-center">
+            <p class="text-sm text-gray-500">Tarea en curso:</p>
+            <p id="selected-task-name" class="text-xl font-bold text-gray-400">Ninguna</p>
+        </div>
+        <div class="flex space-x-4 w-full justify-center">
+            <button id="start-btn" class="bg-green-500 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl shadow-md transition duration-150 transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed w-1/2 md:w-auto">
+                INICIO
+            </button>
+            <button id="end-btn" class="bg-red-500 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-xl shadow-md transition duration-150 transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed w-1/2 md:w-auto" disabled>
+                FIN
+            </button>
+        </div>
+    </div>
+
+    <!-- Panel de Tarea Activa (Timer) -->
+    <div id="active-task-card" class="bg-indigo-600 text-white p-4 rounded-xl shadow-lg mb-6 border-b-4 border-indigo-800 hidden">
+        <h2 class="text-sm font-semibold opacity-80">TIEMPO ACTIVO PARA:</h2>
+        <p id="active-task-name" class="text-2xl font-extrabold mb-2"></p>
+        <div class="flex justify-between items-end mt-2">
+            <div>
+                <span class="text-xs opacity-70">Hora de Inicio de Tarea:</span>
+                <p id="active-task-time" class="text-lg font-bold"></p>
+            </div>
+            <div class="text-right">
+                <span class="text-xs opacity-70">Tiempo Transcurrido:</span>
+                <p id="active-task-duration" class="text-3xl font-extrabold"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contenedor de 16 Botones de Tareas -->
+    <h2 class="text-xl font-semibold text-gray-800 mb-3">Tareas (Pulsar para registrar)</h2>
+    <div id="task-buttons" class="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-4 mb-8">
+        <!-- Los botones de tareas se generan dinámicamente por JavaScript desde CURRENT_TASKS -->
+    </div>
+
+    <!-- Historial de Actividades y Exportación -->
+    <section class="mb-8">
+        <div class="flex justify-between items-center mb-3">
+            <h2 class="text-xl font-semibold text-gray-800">Resumen Acumulado por Tarea (<span id="history-count">0</span>)</h2>
+            <div class="flex space-x-2">
+                <button id="export-graph-btn" class="bg-pink-500 hover:bg-pink-700 text-white text-sm font-semibold py-2 px-3 rounded-xl shadow-md transition duration-150 ease-in-out active:scale-95 flex items-center disabled:opacity-50 disabled:cursor-not-allowed hidden" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1z" />
+                        <path fill-rule="evenodd" d="M14 7a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1zM6 9a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1zM4 4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2H4z" clip-rule="evenodd" />
+                    </svg>
+                    Exportar Gráfico (PNG/SVG)
+                </button>
+                <button id="export-btn" class="bg-indigo-500 hover:bg-indigo-700 text-white text-sm font-semibold py-2 px-3 rounded-xl shadow-md transition duration-150 ease-in-out active:scale-95 flex items-center disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L10 11.586l2.293-2.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                      <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v9.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 12.586V3a1 1 0 011-1z" clip-rule="evenodd" />
+                    </svg>
+                    Exportar CSV
+                </button>
+            </div>
+        </div>
+        
+        <ul id="activity-list">
+            <li class="p-3 text-center text-gray-500 bg-white rounded-lg shadow-sm">No hay actividades recientes registradas.</li>
+        </ul>
+    </section>
+
+    <!-- NUEVA SECCIÓN: Análisis de Flujo de Operaciones (Gráfico) -->
+    <section class="mb-8 p-4 bg-white rounded-xl shadow-lg">
+        <h2 class="text-xl font-semibold text-gray-800 mb-3">Análisis de Flujo de Operaciones (Ventana de 5 Minutos)</h2>
+        <div id="gantt-chart-container" class="w-full overflow-x-auto">
+            <!-- El gráfico SVG de D3.js se insertará aquí -->
+            <p class="text-center text-gray-500 mt-4">Pulsa INICIO para empezar a generar el gráfico.</p>
+        </div>
+    </section>
+
+    <!-- Modal de Captura de Datos -->
+    <div id="data-capture-modal" class="fixed inset-0 bg-gray-600 bg-opacity-90 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-xl p-6 m-4 max-w-sm w-full shadow-2xl">
+            <h3 class="text-2xl font-bold text-indigo-700 mb-4">Iniciar Nuevo Estudio</h3>
+            <p class="text-gray-700 mb-4">Introduce el nombre del operario y su puesto para registrar este estudio.</p>
+            
+            <!-- Selector de Nombre -->
+            <div class="mb-4">
+                <label for="name-select" class="block text-sm font-medium text-gray-700 mb-1">Nombre:</label>
+                <select id="name-select" onchange="handleNameSelectChange()" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"></select>
+            </div>
+            <div id="manual-name-group" class="mb-4 hidden">
+                <input type="text" id="manual-name-input" placeholder="Introduce el nombre" class="w-full p-3 border border-gray-300 rounded-lg uppercase">
+            </div>
+
+            <!-- Selector de Puesto -->
+            <div class="mb-6">
+                <label for="role-select" class="block text-sm font-medium text-gray-700 mb-1">Puesto:</label>
+                <select id="role-select" onchange="handleRoleSelectChange()" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"></select>
+            </div>
+            <div id="manual-role-group" class="mb-6 hidden">
+                <input type="text" id="manual-role-input" placeholder="Introduce el puesto" class="w-full p-3 border border-gray-300 rounded-lg uppercase">
+            </div>
+
+            <button id="capture-name-role-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-3 rounded-lg transition duration-150">
+                COMENZAR REGISTRO
+            </button>
+        </div>
+    </div>
+    
+    <!-- Modal de AJUSTES -->
+    <div id="settings-modal" class="fixed inset-0 bg-gray-600 bg-opacity-90 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-xl p-6 m-4 max-w-lg w-full shadow-2xl overflow-y-auto max-h-[90vh]">
+            <h3 class="text-2xl font-bold text-indigo-700 mb-6 border-b pb-2 flex justify-between items-center">
+                Ajustes de la Aplicación
+                <button id="close-settings-modal-btn" class="text-gray-400 hover:text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </h3>
+            
+            <div class="space-y-6">
+                
+                <!-- 1. Gestión de Nombres -->
+                <div class="border p-4 rounded-lg bg-gray-50">
+                    <h4 class="font-bold text-lg text-gray-800 mb-3">1. Nombres de Operarios</h4>
+                    
+                    <div class="space-y-3">
+                        <!-- Añadir Nombre -->
+                        <div>
+                            <p class="text-sm font-semibold mb-1">Añadir Nombre:</p>
+                            <div class="flex space-x-2">
+                                <input type="text" id="settings-add-name-input" placeholder="Nuevo Nombre" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm uppercase">
+                                <button id="settings-add-name-btn" class="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-4 rounded-lg transition duration-150">Añadir</button>
+                            </div>
+                        </div>
+
+                        <!-- Eliminar Nombre -->
+                        <div>
+                            <p class="text-sm font-semibold mb-1">Eliminar Nombre:</p>
+                            <div class="flex space-x-2">
+                                <select id="settings-remove-name-select" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm"></select>
+                                <button id="settings-remove-name-btn" class="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-4 rounded-lg transition duration-150">Eliminar</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Gestión de Puestos -->
+                <div class="border p-4 rounded-lg bg-gray-50">
+                    <h4 class="font-bold text-lg text-gray-800 mb-3">2. Puestos de Trabajo</h4>
+                    
+                    <div class="space-y-3">
+                        <!-- Añadir Puesto -->
+                        <div>
+                            <p class="text-sm font-semibold mb-1">Añadir Puesto:</p>
+                            <div class="flex space-x-2">
+                                <input type="text" id="settings-add-role-input" placeholder="Nuevo Puesto" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm uppercase">
+                                <button id="settings-add-role-btn" class="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-4 rounded-lg transition duration-150">Añadir</button>
+                            </div>
+                        </div>
+
+                        <!-- Eliminar Puesto -->
+                        <div>
+                            <p class="text-sm font-semibold mb-1">Eliminar Puesto:</p>
+                            <div class="flex space-x-2">
+                                <select id="settings-remove-role-select" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm"></select>
+                                <button id="settings-remove-role-btn" class="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-4 rounded-lg transition duration-150">Eliminar</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Gestión de Tareas -->
+                <div class="border p-4 rounded-lg bg-gray-50">
+                    <h4 class="font-bold text-lg text-gray-800 mb-3">3. Gestión de Tareas</h4>
+                    
+                    <div class="space-y-3">
+                        <!-- Añadir Tarea -->
+                        <div>
+                            <p class="text-sm font-semibold mb-1">Añadir Tarea:</p>
+                            <div class="flex space-x-2 mb-2">
+                                <input type="text" id="settings-add-task-input" placeholder="Nombre de la nueva tarea" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm">
+                            </div>
+                            <div class="flex space-x-2">
+                                <select id="settings-add-task-color" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm"></select>
+                                <button id="settings-add-task-btn" class="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-4 rounded-lg transition duration-150">Añadir</button>
+                            </div>
+                        </div>
+
+                        <!-- Eliminar Tarea -->
+                        <div>
+                            <p class="text-sm font-semibold mb-1">Eliminar Tarea:</p>
+                            <div class="flex space-x-2">
+                                <select id="settings-remove-task-select" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm"></select>
+                                <button id="settings-remove-task-btn" class="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-4 rounded-lg transition duration-150">Eliminar</button>
+                            </div>
+                        </div>
+                        
+                        <!-- Lista de Tareas Actuales -->
+                        <div class="mt-4">
+                            <p class="text-sm font-semibold mb-1">Tareas actuales (Orden Alfabético):</p>
+                            <ul id="settings-current-tasks-list" class="space-y-1 text-xs max-h-40 overflow-y-auto p-2 bg-white rounded-lg border">
+                                <!-- Se rellena con JS -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Configuración de Correo -->
+                <div class="border p-4 rounded-lg bg-gray-50">
+                    <h4 class="font-bold text-lg text-gray-800 mb-3">4. Correo Electrónico (Para exportación)</h4>
+                    <p class="text-sm font-semibold mb-1">Dirección:</p>
+                    <div class="flex space-x-2">
+                        <input type="email" id="settings-email-input" placeholder="ejemplo@dominio.com" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm">
+                        <button id="settings-email-save-btn" class="bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-semibold px-4 rounded-lg transition duration-150">Guardar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal de Mensajes (Existente) -->
+    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-xl p-6 m-4 max-w-sm w-full shadow-2xl">
+            <h3 id="modal-title" class="text-xl font-bold text-red-600 mb-4"></h3>
+            <p id="modal-message" class="text-gray-700 mb-6"></p>
+            <button id="close-modal-btn" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 rounded-lg transition duration-150">
+                Entendido
+            </button>
+        </div>
+    </div>
+    
+    <!-- Modal de Aviso de Correo (REGISTRO DE TAREAS) -->
+    <div id="email-prompt-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-xl p-6 m-4 max-w-sm w-full shadow-2xl text-center">
+            <h3 class="text-xl font-bold text-indigo-600 mb-3">Paso Final: Enviar por Correo</h3>
+            <p class="text-gray-700 mb-4">El archivo **<span id="email-prompt-file" class="font-mono bg-gray-100 p-1 rounded"></span>** se ha descargado a tu dispositivo.</p>
+            
+            <p class="text-sm font-semibold text-gray-700 mb-2">Se abrirá un nuevo correo dirigido a:</p>
+            <p id="email-prompt-recipient" class="text-lg font-extrabold text-green-700 mb-4 truncate"></p>
+
+            <p class="text-red-600 font-semibold mb-4">⚠️ IMPORTANTE: Recuerda adjuntar el archivo CSV que acabas de descargar en el email.</p>
+            
+            <div class="flex justify-between space-x-3">
+                <button id="launch-email-btn" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-3 rounded-lg transition duration-150 flex items-center justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
+                        <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+                    </svg>
+                    Abrir Correo
+                </button>
+                <button id="email-prompt-close-btn" class="w-1/3 bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-3 rounded-lg transition duration-150">
+                    Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
